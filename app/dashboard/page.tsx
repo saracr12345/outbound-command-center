@@ -280,11 +280,10 @@ export default async function DashboardPage({
         <section className="mb-10">
           <p className="text-sm text-neutral-500">Overview</p>
           <h2 className="mt-1 text-3xl font-bold tracking-tight">
-            Your live outbound database.
+            Live outbound database.
           </h2>
           <p className="mt-3 max-w-2xl text-sm leading-6 text-neutral-500">
-            Leads are now stored in Supabase and protected by your
-            organization membership.
+            Leads are now stored and protected in Supabase.
           </p>
         </section>
 
@@ -315,7 +314,7 @@ export default async function DashboardPage({
               <div>
                 <h3 className="font-bold">Recent leads</h3>
                 <p className="mt-1 text-sm text-neutral-500">
-                  The 25 newest leads in your organisation.
+                  The 25 newest leads in organisation.
                 </p>
               </div>
               <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700">
