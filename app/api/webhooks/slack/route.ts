@@ -376,14 +376,34 @@ async function processSlackEvent(payload: SlackPayload): Promise<void> {
   const expectedBotId = process.env.SLACK_RB2B_BOT_ID;
   const event = payload.event;
 
+  console.log("Slack RB2B filter check:", {
+    eventType: event?.type ?? null,
+    receivedChannelId: event?.channel ?? null,
+    expectedChannelId: expectedChannelId ?? null,
+    receivedBotId: event?.bot_id ?? null,
+    expectedBotId: expectedBotId ?? null,
+    hasOrganizationId: Boolean(organizationId),
+  });
+
   if (!organizationId || !expectedChannelId || !expectedBotId) {
     console.error("Slack RB2B ingestion environment variables are missing.");
     return;
   }
 
-  if (!event || event.type !== "message") return;
-  if (event.channel !== expectedChannelId) return;
-  if (event.bot_id !== expectedBotId) return;
+  if (!event || event.type !== "message") {
+    console.warn("Ignored Slack event: not a message.");
+    return;
+  }
+
+  if (event.channel !== expectedChannelId) {
+    console.warn("Ignored Slack event: channel ID did not match.");
+    return;
+  }
+
+  if (event.bot_id !== expectedBotId) {
+    console.warn("Ignored Slack event: bot ID did not match.");
+    return;
+  }
 
   const admin = createAdminClient();
   const hash = payload.event_id ?? eventHash(payload);
@@ -602,7 +622,14 @@ export async function POST(request: Request) {
     // Slack requires a fast acknowledgement. Next.js continues this work
     // after the HTTP response has been returned.
     after(async () => {
-      await processSlackEvent(payload);
+      try {
+        await processSlackEvent(payload);
+      } catch (error) {
+        console.error(
+          "Unhandled Slack background processing error:",
+          error,
+        );
+      }
     });
   }
 
