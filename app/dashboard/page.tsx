@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { addLead, logout } from "./actions";
@@ -31,6 +32,19 @@ type IntegrationRow = {
   provider: string;
   status: string;
   last_synced_at: string | null;
+};
+
+type DashboardMetric = {
+  label: string;
+  value: number;
+  note: string;
+  href?: string;
+};
+
+type RecentActivity = {
+  id: string;
+  title: string;
+  occurred_at: string;
 };
 
 function formatLabel(value: string) {
@@ -86,9 +100,9 @@ export default async function DashboardPage({
   }
 
   const email =
-  typeof claims?.email === "string"
-    ? claims.email
-    : "Team member";
+    typeof claims?.email === "string"
+      ? claims.email
+      : "Team member";
 
   const { data: membership, error: membershipError } =
     await supabase
@@ -188,9 +202,10 @@ export default async function DashboardPage({
   }
 
   const leads = (leadsResult.data ?? []) as LeadRow[];
-  const integrations =
-    (integrationsResult.data ?? []) as IntegrationRow[];
-  const recentActivities = activitiesResult.data ?? [];
+  const integrations = ((integrationsResult.data ?? []) as IntegrationRow[])
+    .filter((integration) => integration.provider !== "apify");
+  const recentActivities =
+    (activitiesResult.data ?? []) as RecentActivity[];
 
   const enrichedCount = leads.filter(
     (lead) =>
@@ -206,11 +221,12 @@ export default async function DashboardPage({
     (lead) => lead.status === "campaign_active",
   ).length;
 
-  const metrics = [
+  const metrics: DashboardMetric[] = [
     {
       label: "Website visitors",
       value: visitsCountResult.count ?? 0,
       note: "RB2B",
+      href: "/visitors",
     },
     {
       label: "Total leads",
@@ -280,32 +296,53 @@ export default async function DashboardPage({
         <section className="mb-10">
           <p className="text-sm text-neutral-500">Overview</p>
           <h2 className="mt-1 text-3xl font-bold tracking-tight">
-            Live outbound database.
+            Your live outbound database.
           </h2>
           <p className="mt-3 max-w-2xl text-sm leading-6 text-neutral-500">
-            Leads are now stored and protected in Supabase.
+            Leads are now stored in Supabase and protected by your
+            organization membership.
           </p>
         </section>
 
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          {metrics.map((metric) => (
-            <article
-              key={metric.label}
-              className="rounded-2xl border border-black/5 bg-white p-6 shadow-sm"
-            >
-              <div className="flex items-start justify-between">
-                <p className="text-sm font-medium text-neutral-500">
-                  {metric.label}
-                </p>
-                <span className="rounded-full bg-neutral-100 px-2.5 py-1 text-xs font-medium text-neutral-500">
-                  {metric.note}
-                </span>
-              </div>
-              <p className="mt-6 text-4xl font-bold tracking-tight">
-                {metric.value}
-              </p>
-            </article>
-          ))}
+          {metrics.map((metric) => {
+            const card = (
+              <article
+                className={
+                  metric.href
+                    ? "h-full rounded-2xl border border-indigo-100 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:border-indigo-200 hover:shadow-md"
+                    : "h-full rounded-2xl border border-black/5 bg-white p-6 shadow-sm"
+                }
+              >
+                <div className="flex items-start justify-between">
+                  <p className="text-sm font-medium text-neutral-500">
+                    {metric.label}
+                  </p>
+                  <span className="rounded-full bg-neutral-100 px-2.5 py-1 text-xs font-medium text-neutral-500">
+                    {metric.note}
+                  </span>
+                </div>
+                <div className="mt-6 flex items-end justify-between gap-4">
+                  <p className="text-4xl font-bold tracking-tight">
+                    {metric.value}
+                  </p>
+                  {metric.href ? (
+                    <span className="text-sm font-semibold text-indigo-600">
+                      View visitors →
+                    </span>
+                  ) : null}
+                </div>
+              </article>
+            );
+
+            return metric.href ? (
+              <Link key={metric.label} href={metric.href} className="block">
+                {card}
+              </Link>
+            ) : (
+              <div key={metric.label}>{card}</div>
+            );
+          })}
         </section>
 
         <section className="mt-8 grid gap-6 xl:grid-cols-[1.4fr_0.8fr]">
@@ -314,7 +351,7 @@ export default async function DashboardPage({
               <div>
                 <h3 className="font-bold">Recent leads</h3>
                 <p className="mt-1 text-sm text-neutral-500">
-                  The 25 newest leads in organisation.
+                  The 25 newest leads in your organisation.
                 </p>
               </div>
               <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700">
