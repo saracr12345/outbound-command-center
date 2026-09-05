@@ -3,14 +3,10 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Outbound Command Center",
-  description: "Clay, RB2B, Apify and HeyReach in one dashboard.",
+  description: "RB2B visitor intelligence, AI targeting, Clay email and HeyReach LinkedIn outreach in one dashboard.",
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
       <body>{children}</body>
