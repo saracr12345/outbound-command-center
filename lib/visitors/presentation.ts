@@ -270,7 +270,13 @@ export function buildVisitorViewModel(
     maskedEmail,
     personLinkedInUrl: firstValue(
       lead?.linkedin_url,
-      readString(parsed, ["linkedinUrl", "linkedin"]),
+      readString(parsed, [
+        "personLinkedInUrl",
+        "personLinkedinUrl",
+        "linkedinUrl",
+        "linkedin",
+      ]),
+      readString(leadMeta, ["linkedin_url", "linkedinUrl"]),
     ),
     phone: lead?.phone ?? null,
     location,
@@ -283,7 +289,15 @@ export function buildVisitorViewModel(
       company?.website_url,
       readString(parsed, ["companyWebsite", "website"]),
     ),
-    companyLinkedInUrl: company?.linkedin_url ?? null,
+    companyLinkedInUrl: firstValue(
+      company?.linkedin_url,
+      readString(parsed, [
+        "companyLinkedInUrl",
+        "companyLinkedinUrl",
+        "companyLinkedin",
+      ]),
+      readString(companyMeta, ["linkedin_url", "linkedinUrl"]),
+    ),
     industry: firstValue(
       company?.industry,
       readString(parsed, ["industry"]),

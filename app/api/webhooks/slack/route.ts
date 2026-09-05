@@ -26,6 +26,7 @@ type ExistingCompany = {
   name: string;
   domain: string | null;
   website_url: string | null;
+  linkedin_url: string | null;
   industry: string | null;
   employee_count: number | null;
   metadata: JsonObject | null;
@@ -135,7 +136,7 @@ async function findOrCreateCompany(
     const { data, error } = await admin
       .from("companies")
       .select(
-        "id, name, domain, website_url, industry, employee_count, metadata",
+        "id, name, domain, website_url, linkedin_url, industry, employee_count, metadata",
       )
       .eq("organization_id", organizationId)
       .eq("domain", visitor.companyDomain)
@@ -150,7 +151,7 @@ async function findOrCreateCompany(
     const { data, error } = await admin
       .from("companies")
       .select(
-        "id, name, domain, website_url, industry, employee_count, metadata",
+        "id, name, domain, website_url, linkedin_url, industry, employee_count, metadata",
       )
       .eq("organization_id", organizationId)
       .ilike("name", visitor.companyName)
@@ -166,6 +167,7 @@ async function findOrCreateCompany(
     location: visitor.location,
     employee_count_raw: visitor.employeeCountRaw,
     estimated_revenue: visitor.estimatedRevenue,
+    linkedin_url: visitor.companyLinkedinUrl,
     page_views: visitor.pageViews,
     last_received_at: new Date().toISOString(),
     raw_text: visitor.rawText,
@@ -177,6 +179,9 @@ async function findOrCreateCompany(
     if (visitor.companyName) update.name = visitor.companyName;
     if (visitor.companyDomain) update.domain = visitor.companyDomain;
     if (visitor.companyWebsite) update.website_url = visitor.companyWebsite;
+    if (visitor.companyLinkedinUrl) {
+      update.linkedin_url = visitor.companyLinkedinUrl;
+    }
     if (visitor.industry) update.industry = visitor.industry;
     if (visitor.employeeCount !== null) {
       update.employee_count = visitor.employeeCount;
@@ -198,6 +203,7 @@ async function findOrCreateCompany(
       name: visitor.companyName ?? visitor.companyDomain ?? "Unknown company",
       domain: visitor.companyDomain,
       website_url: visitor.companyWebsite,
+      linkedin_url: visitor.companyLinkedinUrl,
       industry: visitor.industry,
       employee_count: visitor.employeeCount,
       metadata,
@@ -285,6 +291,7 @@ async function findOrCreateLead(
 
   const metadata = mergeMetadata(existing?.metadata ?? null, {
     masked_email: visitor.maskedEmail,
+    linkedin_url: visitor.linkedinUrl,
     location: visitor.location,
     page_views: visitor.pageViews,
     last_page_url: visitor.pageUrl,
@@ -376,19 +383,19 @@ async function processSlackEvent(payload: SlackPayload): Promise<void> {
   const expectedBotId = process.env.SLACK_RB2B_BOT_ID;
   const event = payload.event;
 
-  console.log("Slack RB2B filter check:", {
-    eventType: event?.type ?? null,
-    receivedChannelId: event?.channel ?? null,
-    expectedChannelId: expectedChannelId ?? null,
-    receivedBotId: event?.bot_id ?? null,
-    expectedBotId: expectedBotId ?? null,
-    hasOrganizationId: Boolean(organizationId),
-  });
-
   if (!organizationId || !expectedChannelId || !expectedBotId) {
     console.error("Slack RB2B ingestion environment variables are missing.");
     return;
   }
+
+  console.log("Slack RB2B filter check:", {
+    eventType: event?.type ?? null,
+    receivedChannelId: event?.channel ?? null,
+    expectedChannelId,
+    receivedBotId: event?.bot_id ?? null,
+    expectedBotId,
+    hasOrganizationId: Boolean(organizationId),
+  });
 
   if (!event || event.type !== "message") {
     console.warn("Ignored Slack event: not a message.");
