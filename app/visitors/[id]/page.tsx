@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AppShell } from "@/app/components/app-shell";
 import { SectionCard, StatusPill } from "@/app/components/ui";
+import { HeyReachLauncher } from "@/app/components/heyreach-launcher";
 import { getDashboardContext } from "@/lib/dashboard/context";
 import {
   buildVisitorViewModel,
@@ -12,9 +13,11 @@ import {
 } from "@/lib/visitors/presentation";
 import {
   analyseTarget,
+  approveTargetAndSyncClay,
   approveOutreachDraft,
   generateOutreach,
   saveOutreachDraft,
+  syncCompanyToClay,
 } from "./actions";
 
 type VisitorDetailPageProps = {
@@ -28,6 +31,17 @@ type AnalysisRow = {
   score: number;
   classification: string;
   summary: string;
+  research: {
+    identity_match?: boolean;
+    confidence?: string;
+    current_job_title?: string | null;
+    current_company?: string | null;
+    seniority?: string | null;
+    location?: string | null;
+    profile_summary?: string | null;
+    evidence_notes?: string[];
+  } | null;
+  research_sources: Array<{ url?: string; title?: string | null }> | null;
   criteria: Record<string, Criterion> | null;
   positive_signals: unknown;
   concerns: unknown;
@@ -49,6 +63,23 @@ type DraftRow = {
   prompt_version: string;
   approved_at: string | null;
   created_at: string;
+};
+
+type ClayTargetSyncRow = {
+  id: string;
+  target_status: string;
+  person_status: string;
+  company_status: string;
+  approved_at: string;
+  synced_at: string | null;
+  error_message: string | null;
+};
+
+type ClayCompanySyncRow = {
+  id: string;
+  status: string;
+  synced_at: string | null;
+  error_message: string | null;
 };
 
 const criterionLabels: Record<string, { label: string; max: number }> = {
@@ -125,12 +156,14 @@ export default async function VisitorDetailPage({ params, searchParams }: Visito
 
   let latestAnalysis: AnalysisRow | null = null;
   let latestDraft: DraftRow | null = null;
+  let clayTargetSync: ClayTargetSyncRow | null = null;
+  let clayCompanySync: ClayCompanySyncRow | null = null;
 
   if (visit.lead_id) {
-    const [analysisResult, draftResult] = await Promise.all([
+    const [analysisResult, draftResult, claySyncResult] = await Promise.all([
       supabase
         .from("lead_analyses")
-        .select("id, score, classification, summary, criteria, positive_signals, concerns, missing_information, recommended_angle, model, prompt_version, created_at")
+        .select("id, score, classification, summary, research, research_sources, criteria, positive_signals, concerns, missing_information, recommended_angle, model, prompt_version, created_at")
         .eq("organization_id", organizationId)
         .eq("lead_id", visit.lead_id)
         .order("created_at", { ascending: false })
@@ -144,12 +177,48 @@ export default async function VisitorDetailPage({ params, searchParams }: Visito
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle(),
+      supabase
+        .from("clay_target_syncs")
+        .select("id, target_status, person_status, company_status, approved_at, synced_at, error_message")
+        .eq("organization_id", organizationId)
+        .eq("lead_id", visit.lead_id)
+        .limit(1)
+        .maybeSingle(),
     ]);
     latestAnalysis = analysisResult.data as AnalysisRow | null;
     latestDraft = draftResult.data as DraftRow | null;
+    clayTargetSync = claySyncResult.data as ClayTargetSyncRow | null;
   }
 
-  const tone = latestAnalysis ? classificationTone(latestAnalysis.classification) : null;
+  if (visit.company_id) {
+    const companySyncResult = await supabase
+      .from("clay_company_syncs")
+      .select("id, status, synced_at, error_message")
+      .eq("organization_id", organizationId)
+      .eq("company_id", visit.company_id)
+      .limit(1)
+      .maybeSingle();
+
+    if (companySyncResult.error) {
+      console.error("Could not load Clay company sync:", companySyncResult.error);
+    } else {
+      clayCompanySync = companySyncResult.data as ClayCompanySyncRow | null;
+    }
+  }
+
+  const tone = latestAnalysis
+    ? classificationTone(latestAnalysis.classification)
+    : null;
+  const targetApproved = clayTargetSync?.target_status === "approved";
+  const clayReady = Boolean(
+    targetApproved &&
+      clayTargetSync?.person_status === "synced" &&
+      (clayTargetSync?.company_status === "synced" ||
+        clayTargetSync?.company_status === "skipped"),
+  );
+  const companyClaySynced =
+    clayCompanySync?.status === "synced" ||
+    clayTargetSync?.company_status === "synced";
 
   return (
     <AppShell
@@ -167,27 +236,32 @@ export default async function VisitorDetailPage({ params, searchParams }: Visito
 
       <div className="mb-5 flex flex-wrap gap-2">
         <StatusPill tone={model.profileType === "person" ? "blue" : "indigo"}>{model.profileType === "person" ? "Person-level visitor" : "Company-level visitor"}</StatusPill>
-        {model.personLinkedInUrl ? <StatusPill tone="indigo">LinkedIn available</StatusPill> : null}
+        {model.personLinkedInUrl ? <StatusPill tone="indigo">Person LinkedIn available</StatusPill> : null}
+        {model.companyLinkedInUrl ? <StatusPill tone="blue">Company LinkedIn available</StatusPill> : null}
         {model.isRepeatVisit ? <StatusPill tone="amber">Repeat visit</StatusPill> : null}
+        {targetApproved ? <StatusPill tone="green">Target approved</StatusPill> : null}
+        {clayReady ? <StatusPill tone="blue">Clay synced</StatusPill> : null}
         {latestDraft?.status === "approved" ? <StatusPill tone="green">Outreach approved</StatusPill> : null}
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[0.9fr_0.9fr_1.2fr]">
-        <SectionCard className="p-5 sm:p-6">
-          <div className="flex items-center justify-between"><h2 className="font-bold text-slate-900">Person</h2><span className="text-xs text-slate-400">RB2B</span></div>
-          <div className="mt-3">
-            <DetailItem label="Name" value={model.personName ?? model.displayName} />
-            <DetailItem label="Job title" value={model.jobTitle} />
-            <DetailItem label="Location" value={model.location} />
-            <DetailItem label="Email" value={model.email ?? model.maskedEmail} />
-            <DetailItem label="LinkedIn" value={model.personLinkedInUrl ? "View person profile" : null} href={model.personLinkedInUrl} />
-          </div>
-        </SectionCard>
+      <div className={`grid gap-5 ${isPerson ? "xl:grid-cols-[0.9fr_0.9fr_1.2fr]" : "lg:grid-cols-2"}`}>
+        {isPerson ? (
+          <SectionCard className="p-5 sm:p-6">
+            <div className="flex items-center justify-between"><h2 className="font-bold text-slate-900">Person</h2><span className="text-xs text-slate-400">RB2B</span></div>
+            <div className="mt-3">
+              <DetailItem label="Name" value={model.personName ?? model.displayName} href={model.personLinkedInUrl} />
+              <DetailItem label="Job title" value={model.jobTitle} />
+              <DetailItem label="Location" value={model.location} />
+              <DetailItem label="Email" value={model.email ?? model.maskedEmail} />
+              <DetailItem label="LinkedIn" value={model.personLinkedInUrl ? "View person profile" : null} href={model.personLinkedInUrl} />
+            </div>
+          </SectionCard>
+        ) : null}
 
         <SectionCard className="p-5 sm:p-6">
           <div className="flex items-center justify-between"><h2 className="font-bold text-slate-900">Company</h2><span className="text-xs text-slate-400">Account</span></div>
           <div className="mt-3">
-            <DetailItem label="Company" value={model.companyName} />
+            <DetailItem label="Company" value={model.companyName} href={model.companyLinkedInUrl} />
             <DetailItem label="Industry" value={model.industry} />
             <DetailItem label="Employees" value={model.employeeCountRaw ?? model.employeeCount} />
             <DetailItem label="Website" value={model.companyWebsite ?? model.companyDomain} href={model.companyWebsite} />
@@ -207,12 +281,57 @@ export default async function VisitorDetailPage({ params, searchParams }: Visito
         </SectionCard>
       </div>
 
+      {!isPerson ? (
+        <SectionCard className="mt-5 overflow-hidden">
+          <div className="grid gap-5 p-5 sm:p-6 lg:grid-cols-[1fr_auto] lg:items-center">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.12em] text-sky-600">Clay company list</p>
+              <h2 className="mt-2 text-lg font-bold text-slate-900">Add this company to Companies from RB2B (Manual)</h2>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
+                This sends the company record to your existing Clay webhook with <span className="font-semibold text-slate-700">record_type = company</span>. Clay then routes it into <span className="font-semibold text-slate-700">Companies from RB2B (Manual)</span>.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
+                <span className="rounded-lg bg-slate-50 px-2.5 py-1.5">{model.companyName}</span>
+                {model.companyLinkedInUrl ? <span className="rounded-lg bg-indigo-50 px-2.5 py-1.5 text-indigo-700">LinkedIn included ✓</span> : <span className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-amber-700">No company LinkedIn captured</span>}
+                {model.companyWebsite ? <span className="rounded-lg bg-sky-50 px-2.5 py-1.5 text-sky-700">Website included ✓</span> : null}
+              </div>
+            </div>
+
+            <form action={syncCompanyToClay} className="w-full lg:w-auto">
+              <input type="hidden" name="visitId" value={visit.id} />
+              <button
+                type="submit"
+                disabled={companyClaySynced}
+                className={
+                  companyClaySynced
+                    ? "w-full cursor-default rounded-xl bg-emerald-100 px-5 py-3 text-sm font-bold text-emerald-700 lg:w-auto"
+                    : "w-full rounded-xl bg-indigo-600 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-indigo-700 lg:w-auto"
+                }
+              >
+                {companyClaySynced
+                  ? "Added to Clay Companies ✓"
+                  : clayCompanySync?.status === "failed"
+                    ? "Retry add to Clay"
+                    : "Add company to Clay →"}
+              </button>
+            </form>
+          </div>
+
+          {clayCompanySync?.error_message ? (
+            <div className="border-t border-amber-100 bg-amber-50 px-5 py-3 text-xs leading-5 text-amber-800 sm:px-6">
+              {clayCompanySync.error_message}
+            </div>
+          ) : null}
+        </SectionCard>
+      ) : null}
+
+      {isPerson ? (
       <SectionCard className="mt-5 p-5 sm:p-6">
         <div className="flex flex-col justify-between gap-4 md:flex-row md:items-start">
           <div>
-            <p className="text-xs font-bold uppercase tracking-[0.14em] text-indigo-600">AI Target Analysis</p>
-            <h2 className="mt-2 text-xl font-bold text-slate-900">Should we contact this person?</h2>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">Scoring uses only the visitor and company evidence already stored in the dashboard. Unknown information is not invented.</p>
+            <p className="text-xs font-bold uppercase tracking-[0.14em] text-indigo-600">AI fit analysis</p>
+            <h2 className="mt-2 text-xl font-bold text-slate-900">How well does this visitor match our outbound criteria?</h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">The AI checks the professional public web first, starting from the LinkedIn URL when available, then combines verified role/company evidence with the RB2B visit signals.</p>
           </div>
           {isPerson ? (
             <form action={analyseTarget}>
@@ -228,9 +347,10 @@ export default async function VisitorDetailPage({ params, searchParams }: Visito
           <div className="mt-6">
             <div className="grid gap-4 lg:grid-cols-[220px_1fr]">
               <div className={`rounded-2xl border p-5 ${tone.card}`}>
-                <p className="text-xs font-bold uppercase tracking-[0.1em] text-slate-500">Target score</p>
+                <p className="text-xs font-bold uppercase tracking-[0.1em] text-slate-500">AI target score</p>
                 <div className="mt-3 flex items-end gap-2"><span className="text-5xl font-bold tracking-tight text-slate-900">{latestAnalysis.score}</span><span className="pb-1 text-sm text-slate-400">/100</span></div>
                 <div className="mt-4"><StatusPill tone={tone.pill}>{formatLabel(latestAnalysis.classification)}</StatusPill></div>
+                <p className="mt-3 text-xs leading-5 text-slate-500">80–100 Strong target · 60–79 Review · 0–59 Low priority. Human approval is still required.</p>
               </div>
               <div className="rounded-2xl border border-indigo-100 bg-indigo-50/55 p-5">
                 <p className="text-xs font-bold uppercase tracking-[0.1em] text-indigo-600">Recommended angle</p>
@@ -259,21 +379,104 @@ export default async function VisitorDetailPage({ params, searchParams }: Visito
               <div className="rounded-xl border border-amber-100 bg-amber-50/55 p-4"><p className="text-sm font-bold text-amber-700">Concerns</p><ul className="mt-3 space-y-2 text-sm leading-5 text-amber-900">{strings(latestAnalysis.concerns).length ? strings(latestAnalysis.concerns).map((item) => <li key={item}>• {item}</li>) : <li>• No material concerns recorded.</li>}</ul></div>
               <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4"><p className="text-sm font-bold text-slate-700">Unknowns</p><ul className="mt-3 space-y-2 text-sm leading-5 text-slate-600">{strings(latestAnalysis.missing_information).length ? strings(latestAnalysis.missing_information).map((item) => <li key={item}>• {item}</li>) : <li>• No important information gaps recorded.</li>}</ul></div>
             </div>
+
+            <div className="mt-4 rounded-2xl border border-sky-100 bg-sky-50/45 p-4 sm:p-5">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.1em] text-sky-700">Professional web research</p>
+                  <h3 className="mt-1 text-sm font-bold text-slate-900">LinkedIn + corroborating public sources</h3>
+                </div>
+                <StatusPill tone={latestAnalysis.research?.confidence === "high" ? "green" : latestAnalysis.research?.confidence === "medium" ? "amber" : "neutral"}>
+                  {latestAnalysis.research?.confidence ? `${formatLabel(latestAnalysis.research.confidence)} confidence` : "No confidence"}
+                </StatusPill>
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <DetailItem label="Researched role" value={latestAnalysis.research?.current_job_title ?? "—"} />
+                <DetailItem label="Researched company" value={latestAnalysis.research?.current_company ?? "—"} />
+                <DetailItem label="Seniority" value={latestAnalysis.research?.seniority ?? "—"} />
+                <DetailItem label="Location" value={latestAnalysis.research?.location ?? "—"} />
+              </div>
+
+              {latestAnalysis.research?.profile_summary ? (
+                <p className="mt-4 text-sm leading-6 text-slate-600">{latestAnalysis.research.profile_summary}</p>
+              ) : null}
+
+              {strings(latestAnalysis.research?.evidence_notes).length ? (
+                <ul className="mt-3 space-y-1.5 text-xs leading-5 text-slate-500">
+                  {strings(latestAnalysis.research?.evidence_notes).map((item) => <li key={item}>• {item}</li>)}
+                </ul>
+              ) : null}
+
+              {Array.isArray(latestAnalysis.research_sources) && latestAnalysis.research_sources.length ? (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {latestAnalysis.research_sources.slice(0, 6).map((source, index) => source?.url ? (
+                    <a key={`${source.url}-${index}`} href={source.url} target="_blank" rel="noreferrer" className="rounded-lg border border-sky-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-sky-700 hover:border-sky-300">
+                      {source.title || `Source ${index + 1}`} ↗
+                    </a>
+                  ) : null)}
+                </div>
+              ) : null}
+            </div>
+            <div className="mt-5 rounded-2xl border border-violet-100 bg-violet-50/45 p-4 sm:p-5">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.12em] text-violet-600">Human target approval</p>
+                  <h3 className="mt-1.5 font-bold text-slate-900">Approve this person before outreach</h3>
+                  <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">Approval does not send any email or LinkedIn message. It only marks the person as a qualified target and syncs the person to Clay People plus their company to Clay Companies.</p>
+                </div>
+                <form action={approveTargetAndSyncClay} className="shrink-0">
+                  <input type="hidden" name="visitId" value={visit.id} />
+                  <input type="hidden" name="analysisId" value={latestAnalysis.id} />
+                  <button
+                    type="submit"
+                    disabled={clayReady}
+                    className={clayReady ? "cursor-default rounded-xl bg-emerald-100 px-4 py-2.5 text-sm font-semibold text-emerald-700" : "rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-violet-700"}
+                  >
+                    {clayReady ? "Approved + synced to Clay ✓" : targetApproved ? "Retry Clay sync" : "Approve target + sync to Clay"}
+                  </button>
+                </form>
+              </div>
+
+              {clayTargetSync ? (
+                <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-xl border border-white/80 bg-white/80 p-3.5">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-slate-400">Decision</p>
+                    <p className="mt-1.5 text-sm font-semibold text-slate-700">{targetApproved ? "Approved" : formatLabel(clayTargetSync.target_status)}</p>
+                  </div>
+                  <div className="rounded-xl border border-white/80 bg-white/80 p-3.5">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-slate-400">Clay People</p>
+                    <p className="mt-1.5 text-sm font-semibold text-slate-700">{formatLabel(clayTargetSync.person_status)}</p>
+                  </div>
+                  <div className="rounded-xl border border-white/80 bg-white/80 p-3.5">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-slate-400">Clay Company</p>
+                    <p className="mt-1.5 text-sm font-semibold text-slate-700">{formatLabel(clayTargetSync.company_status)}</p>
+                  </div>
+                </div>
+              ) : null}
+
+              {clayTargetSync?.error_message ? (
+                <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800">{clayTargetSync.error_message}</div>
+              ) : null}
+            </div>
+
             <p className="mt-4 text-xs text-slate-400">Generated {formatDateTime(latestAnalysis.created_at)} · {latestAnalysis.prompt_version} · {latestAnalysis.model}</p>
           </div>
         ) : (
           <div className="mt-6 rounded-xl border border-dashed border-slate-200 bg-slate-50/40 px-6 py-10 text-center"><p className="font-semibold text-slate-700">Not analysed yet</p><p className="mt-2 text-sm text-slate-500">Run the AI analysis to score this person and unlock personalised outreach.</p></div>
         )}
       </SectionCard>
+      ) : null}
 
+      {isPerson ? (
       <SectionCard className="mt-5 p-5 sm:p-6">
         <div className="flex flex-col justify-between gap-4 md:flex-row md:items-start">
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.14em] text-indigo-600">Personalised Outreach</p>
             <h2 className="mt-2 text-xl font-bold text-slate-900">Email + LinkedIn drafts</h2>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">Drafts remain editable and nothing is sent until a human approves the copy. Launching through Clay and HeyReach comes next.</p>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">After the target is approved and synced to Clay, generate and review the personalised email + LinkedIn copy. Nothing sends at this stage.</p>
           </div>
-          {isPerson && latestAnalysis ? (
+          {isPerson && latestAnalysis && clayReady ? (
             <form action={generateOutreach}><input type="hidden" name="visitId" value={visit.id} /><button className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-700 hover:bg-indigo-100">{latestDraft ? "Regenerate drafts" : "Generate outreach"}</button></form>
           ) : null}
         </div>
@@ -282,6 +485,8 @@ export default async function VisitorDetailPage({ params, searchParams }: Visito
           <p className="mt-5 text-sm text-slate-500">Outreach generation is available for person-level visitors only.</p>
         ) : !latestAnalysis ? (
           <p className="mt-5 text-sm text-slate-500">Analyse the target first.</p>
+        ) : !clayReady ? (
+          <div className="mt-5 rounded-xl border border-violet-100 bg-violet-50 px-4 py-4 text-sm text-violet-700">Approve the target and complete the Clay People/Companies sync above before generating outreach.</div>
         ) : latestDraft ? (
           <form action={saveOutreachDraft} className="mt-6">
             <input type="hidden" name="visitId" value={visit.id} />
@@ -313,7 +518,7 @@ export default async function VisitorDetailPage({ params, searchParams }: Visito
             <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-slate-100 pt-5">
               <button type="submit" className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 hover:border-indigo-200 hover:text-indigo-700">Save changes</button>
               <button type="submit" formAction={approveOutreachDraft} className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700">{latestDraft.status === "approved" ? "Save + keep approved" : "Approve outreach"}</button>
-              <button type="button" disabled title="HeyReach + Clay integration is the next milestone" className="cursor-not-allowed rounded-xl bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-300 ring-1 ring-indigo-100">Launch outreach — next</button>
+              <HeyReachLauncher draftId={latestDraft.id} approved={latestDraft.status === "approved"} linkedinReady={Boolean(model.personLinkedInUrl)} />
               <span className="ml-auto text-xs text-slate-400">{latestDraft.prompt_version} · {latestDraft.model}{latestDraft.approved_at ? ` · approved ${formatDateTime(latestDraft.approved_at)}` : ""}</span>
             </div>
           </form>
@@ -321,6 +526,7 @@ export default async function VisitorDetailPage({ params, searchParams }: Visito
           <div className="mt-6 rounded-xl border border-dashed border-slate-200 bg-slate-50/40 px-6 py-10 text-center"><p className="font-semibold text-slate-700">No outreach draft yet</p><p className="mt-2 text-sm text-slate-500">Generate personalised email and LinkedIn copy from the target analysis.</p></div>
         )}
       </SectionCard>
+      ) : null}
 
       <SectionCard className="mt-5 overflow-hidden">
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-5 sm:px-6"><div><h2 className="font-bold text-slate-900">Visit history</h2><p className="mt-1 text-sm text-slate-500">{history.length} recorded visit{history.length === 1 ? "" : "s"} for this profile.</p></div></div>

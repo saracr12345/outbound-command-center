@@ -258,6 +258,8 @@ export function buildVisitorViewModel(
       ? personName ?? companyName
       : companyName;
 
+  const genericLinkedInUrl = readString(parsed, ["linkedinUrl", "linkedin"]);
+
   return {
     profileType,
     displayName,
@@ -273,9 +275,8 @@ export function buildVisitorViewModel(
       readString(parsed, [
         "personLinkedInUrl",
         "personLinkedinUrl",
-        "linkedinUrl",
-        "linkedin",
       ]),
+      profileType === "person" ? genericLinkedInUrl : null,
       readString(leadMeta, ["linkedin_url", "linkedinUrl"]),
     ),
     phone: lead?.phone ?? null,
@@ -296,6 +297,7 @@ export function buildVisitorViewModel(
         "companyLinkedinUrl",
         "companyLinkedin",
       ]),
+      profileType === "company" ? genericLinkedInUrl : null,
       readString(companyMeta, ["linkedin_url", "linkedinUrl"]),
     ),
     industry: firstValue(
